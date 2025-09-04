@@ -1,98 +1,136 @@
+# ======================================================================
+# NAVIFITG - STREAMLIT DASHBOARD v1.0 (Handal & Real-time)
+# Dijalankan di Streamlit Community Cloud, membaca data dari Firebase
+# ======================================================================
+
 import streamlit as st
 import pandas as pd
 import pyrebase
 from datetime import datetime
+import time
 
-# --- KONFIGURASI HALAMAN & FIREBASE ---
+# --- 1. Konfigurasi Halaman & Koneksi Firebase ---
+
+# Mengatur konfigurasi dasar halaman agar terlihat profesional
 st.set_page_config(
-    page_title="Dashboard NaviFitG",
-    page_icon="?????",
+    page_title="Dashboard Pemantauan NaviFitG",
+    page_icon="🏃‍♀️",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Inisialisasi Firebase menggunakan Streamlit Secrets
+# Mengambil kredensial dari Streamlit Secrets (lebih aman)
 try:
     firebase_config = st.secrets["firebase_config"]
     firebase = pyrebase.initialize_app(firebase_config)
     db = firebase.database()
 except Exception:
-    st.error("Konfigurasi Firebase tidak ditemukan di Streamlit Secrets. Harap atur terlebih dahulu.", icon="??")
-    st.stop()
+    st.error("Konfigurasi Firebase tidak ditemukan atau salah di Streamlit Secrets. Harap atur terlebih dahulu.", icon="🔥")
+    st.stop() # Menghentikan eksekusi jika koneksi gagal
 
+# --- 2. Fungsi Pengambilan Data ---
 
-# --- FUNGSI UTAMA UNTUK MENGAMBIL DATA ---
-@st.cache_data(ttl=2) # Cache data selama 2 detik
+# Menggunakan cache agar tidak terlalu sering memanggil Firebase
+# TTL (Time To Live) = 2 detik. Data akan diambil ulang setiap 2 detik.
+@st.cache_data(ttl=2)
 def get_live_data():
+    """Mengambil data terbaru dari node 'live_data' di Firebase Realtime Database."""
     try:
+        # Mengambil data dari path "live_data"
         data = db.child("live_data").get().val()
         return data if data else {}
     except Exception as e:
-        st.toast(f"Gagal mengambil data: {e}", icon="??")
+        # Menampilkan pesan sementara jika ada gangguan
+        st.toast(f"Gagal mengambil data: {e}", icon="⚠️")
         return {}
 
+# --- 3. Tampilan Antarmuka (UI) Dashboard ---
 
-# --- JUDUL DASHBOARD ---
-st.title("????? Dashboard Pemantauan NaviFitG")
-st.markdown(f"Data terakhir diperbarui pada: **{datetime.now().strftime('%d %B %Y, %H:%M:%S WIB')}**")
+# Judul Utama
+st.title("🏃‍♀️ Dashboard Pemantauan NaviFitG")
 
-# --- AMBIL DATA ---
+# Ambil data terbaru
 data = get_live_data()
 
-if not data:
-    st.warning("Belum ada data diterima dari perangkat. Pastikan perangkat NaviFitG menyala dan terhubung ke internet.")
-    st.stop()
+# Tampilkan timestamp terakhir data diterima
+if data and 'last_update' in data:
+    last_update_time = datetime.fromisoformat(data['last_update']).strftime('%d %B %Y, %H:%M:%S WIB')
+    st.markdown(f"**Data terakhir diterima pada:** `{last_update_time}`")
+else:
+    st.warning("Menunggu data pertama dari perangkat NaviFitG...", icon="📡")
+    st.stop() # Hentikan jika belum ada data sama sekali
 
-# --- LAYOUT DASHBOARD ---
-col1, col2, col3 = st.columns(3)
+# Membuat layout dengan 3 kolom utama
+col1, col2, col3 = st.columns([1, 1.5, 1])
 
-# Kolom 1: Status Kritis (Jarak & Detak Jantung)
+# --- Kolom 1: Status Kritis (Jarak & Kesehatan) ---
 with col1:
-    st.subheader("?? Status Kritis")
-    dist = data.get('distance_m')
-    dist_text = f"{dist:.2f} m" if dist is not None else "N/A"
-    if dist is not None:
-        if dist < 0.5:
-            st.error(f"**BAHAYA!** Rintangan sangat dekat: {dist_text}", icon="??")
-        elif dist < 1.5:
-            st.warning(f"**AWAS!** Rintangan di depan: {dist_text}", icon="??")
-        else:
-            st.success(f"Aman: {dist_text}", icon="?")
-    else:
-        st.info("Sensor jarak tidak aktif.", icon="?")
+    st.subheader("⚠️ Status Kritis")
     
-    bpm = data.get('hr', {}).get('bpm')
-    bpm_text = f"{bpm:.0f} BPM" if bpm is not None else "N/A"
+    # Menampilkan jarak rintangan dengan status berwarna
+    dist = data.get('distance_m')
+    if dist is not None:
+        dist_text = f"{dist:.2f} m"
+        if dist < 0.5:
+            st.error(f"**BAHAYA!** Rintangan sangat dekat: {dist_text}", icon="🚨")
+        elif dist < 1.5:
+            st.warning(f"**AWAS!** Rintangan di depan: {dist_text}", icon="⚠️")
+        else:
+            st.success(f"Aman: {dist_text}", icon="✅")
+    else:
+        st.info("Sensor jarak tidak mengirim data.", icon="❓")
+    
+    # Menampilkan metrik detak jantung dan SpO2
+    hr_data = data.get('hr', {})
+    bpm = hr_data.get('bpm')
+    spo2 = hr_data.get('spo2')
+    
+    bpm_text = f"{int(bpm)}" if bpm is not None else "N/A"
+    spo2_text = f"{int(spo2)}%" if spo2 is not None else "N/A"
+    
     st.metric("Detak Jantung (BPM)", bpm_text)
+    st.metric("Saturasi Oksigen (SpO2)", spo2_text)
 
-# Kolom 2: Status Lokasi & Lingkungan
+# --- Kolom 2: Peta Lokasi & Tampilan Kamera ---
 with col2:
-    st.subheader("?? Lokasi & Lingkungan")
+    st.subheader("📍 Lokasi & Tampilan Lingkungan")
+    
+    # Menampilkan peta lokasi pengguna
     gps_data = data.get('gps', {})
-    if gps_data.get('valid') and gps_data.get('lat') is not None:
+    if gps_data.get('valid') and gps_data.get('lat') is not None and gps_data.get('lon') is not None:
         location_df = pd.DataFrame({'lat': [gps_data['lat']], 'lon': [gps_data['lon']]})
         st.map(location_df, zoom=16)
     else:
-        st.info("Mencari sinyal GPS...", icon="???")
+        st.info("Mencari sinyal GPS...", icon="🛰️")
+        
+    # Menampilkan gambar dari URL yang ada di Firebase
+    image_url = data.get('yolo', {}).get('image_url')
+    if image_url:
+        st.image(image_url, caption="Tampilan dari perangkat (diperbarui secara periodik)", use_column_width=True)
+    else:
+        st.info("Menunggu gambar dari perangkat...", icon="📸")
+
+# --- Kolom 3: Informasi Tambahan ---
+with col3:
+    st.subheader("🔍 Informasi Tambahan")
     
+    # Menampilkan objek yang terdeteksi YOLO
     detections = data.get('yolo', {}).get('detections', [])
     if detections:
         st.metric("Objek Terdeteksi", ", ".join(detections) or "Tidak ada")
     else:
         st.metric("Objek Terdeteksi", "Aman")
+        
+    # Menampilkan kecepatan pengguna
+    speed_kmh = gps_data.get('speed_kmh')
+    speed_text = f"{speed_kmh:.1f} km/jam" if speed_kmh is not None else "N/A"
+    st.metric("Kecepatan", speed_text)
 
-# Kolom 3: Tampilan Kamera & Status Sensor
-with col3:
-    st.subheader("?? Tampilan Kamera")
-    image_url = data.get('yolo', {}).get('image_url')
-    if image_url:
-        st.image(image_url, caption="Live feed dari perangkat (diperbarui setiap 5 detik)", use_column_width=True)
-    else:
-        st.info("Menunggu gambar dari perangkat...", icon="??")
-    
-    with st.expander("Lihat Status Sensor Detail"):
+    # Menampilkan status detail dari semua sensor dalam expander
+    with st.expander("Lihat Status Sensor Perangkat"):
         st.json(data.get('status', {}))
 
-# Auto-refresh halaman setiap 3 detik
+# --- 4. Auto-Refresh ---
+# Membuat halaman dimuat ulang secara otomatis setiap 3 detik
 time.sleep(3)
 st.rerun()
